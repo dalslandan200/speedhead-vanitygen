@@ -1,4 +1,4 @@
-Super Vanitygen
+SpeedHead Vanitygen
 ===============
 
 Fast Vanity Bitcoin address generator for Linux using the
@@ -18,11 +18,14 @@ Example
 Example program execution:
 (Note: Do _not_ send coins to this address!)
 
-    $ vanitygen 1Vanity
-    Difficulty: 888446610539
-    [5003 Kkey/s][Total 31878804156][Prob 3.5%][50% in 1.4d]
-    Private Key:   L3jTmJvNtjNrUw5SJJGFfGTog46fLutsQJ4XG66YWHMV5UmgFWqZ
-    Address:       1Vanity8HEFQDR7ZFsAUFeRR67AG38PcR
+    [root@dalslandan speedhead-vanitygen]# ./vanitygen 1
+    Private Key:   L295MBsHQJ3KN4Y1QDdLmiYkHh6dZPYXYu7pK42G3NTTQbqd5Q4j
+    Address:       1Noc1EKULneAhXTfZogbwrCsAMZfuwyv4g
+
+Changes
+-------
+* Ability to write matches to log file
+* In quiet mode *key generation* is calculated over matches instead of total
 
 Build Prerequisites
 -------------------
@@ -72,7 +75,7 @@ Here are examples of other programs you can use to verify keys:
 * [bitcoin.sh](https://github.com/grondilu/bitcoin-bash-tools/blob/master/bitcoin.sh)
 * or any common wallet software.
 
-Do not run this program on a computer where others have the ability to strace
+Do not run this program on a computer where others have the ability to trace
 your program's execution.
 
 License
@@ -80,9 +83,3 @@ License
 This software is distributed under the GPLv2 license. Most individual portions
 are placed under compatible MIT or BSD licenses. See each respective file for
 details.
-
-Donations
----------
-If you've found this program useful, please consider sending me a few bits:
-
-`gandalf@winds.org` (via OpenAlias) or `1Ganda1fU65mNxGoXomdtReN3ejkcMHGEL`
