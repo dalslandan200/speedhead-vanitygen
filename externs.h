@@ -3,6 +3,7 @@
 #define _GNU_SOURCE    // Use the GNU C Library Extensions
 
 #include <stdlib.h>
+#include <time.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>

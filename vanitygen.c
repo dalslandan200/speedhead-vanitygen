@@ -28,13 +28,21 @@
 #include "src/libsecp256k1-config.h"
 #include "src/secp256k1.c"
 
-#define MY_VERSION "0.3"
+#define MY_VERSION "0.3.1"
 
 /* List of public key byte patterns to match */
 static struct {
   align8 u8 low[20];   // Low limit
   align8 u8 high[20];  // High limit
 } *patterns;
+
+/* Timer variables */
+#define BILLION 1000000000L
+static bool reset_timer = 0;
+
+/* Variables for avarage key generation */
+static int elapsed_count_history[60];
+static unsigned int elapsed_count_history_array_pointer = 0;
 
 static int num_patterns;
 
@@ -44,9 +52,11 @@ static bool anycase;
 static bool keep_going;
 static bool quiet;
 static bool verbose;
+static bool output=0;
+static bool csv=0;
 
 /* Difficulty (1 in x) */
-static double difficulty;
+//static double difficulty;
 
 /* Per-thread hash counter */
 static u64 *thread_count;
@@ -62,6 +72,7 @@ static bool add_anycase_prefix(const char *prefix);
 static double get_difficulty(void);
 static void engine(int thread);
 static bool verify_key(const u8 result[52]);
+static int calc_avg_keyGen(int countValue[60]);
 
 static void my_secp256k1_ge_set_all_gej_var(secp256k1_ge *r,
                                             const secp256k1_gej *a);
@@ -100,6 +111,11 @@ int main(int argc, char *argv[])
       case 'i':  /* Case-insensitive matches */
         anycase=1;
         break;
+	  case 'f':  /* Display in CSV format */
+		csv = 1;
+		quiet = 0;
+		verbose = 0;
+		break;
       case 'k':  /* Keep going */
         keep_going=1;
         break;
@@ -115,6 +131,9 @@ int main(int argc, char *argv[])
         quiet=0;
         verbose=1;
         break;
+	  case 'o':  /* Write to file */
+		  output = 1;
+		  break;
       no_arg:
         fprintf(stderr, "%s: option requires an argument -- '%c'\n", *argv,
                 argv[i][j]);
@@ -127,13 +146,15 @@ int main(int argc, char *argv[])
                 "Usage: %s [options] prefix ...\n"
                 "Options:\n"
                 "  -c count  Stop after 'count' solutions; default=%d\n"
+			    "  -f        Report solutions in CSV format\n"
                 "  -i        Match case-insensitive prefixes\n"
                 "  -k        Keep looking for solutions indefinitely\n"
-                "  -q        Be quiet (report solutions in CSV format)\n"
+                "  -q        Be quiet\n"
                 "  -t num    Run 'num' threads; default=%d\n"
-                "  -v        Be verbose\n\n",
+				"  -v        Verbose\n"
+                "  -o        Write matches to 'output.txt'\n\n",
                 *argv, max_count, threads);
-        fprintf(stderr, "Super Vanitygen v" MY_VERSION "\n");
+        fprintf(stderr, "SpeedHead Vanitygen v" MY_VERSION "\n");
         return 1;
       }
     }
@@ -166,11 +187,11 @@ int main(int argc, char *argv[])
     printf("---\n");
   }
 
-  difficulty=get_difficulty();
+  /*difficulty=get_difficulty();
   if(difficulty < 1)
     difficulty=1;
   if(!quiet)
-    printf("Difficulty: %.0f\n", difficulty);
+    printf("Difficulty: %.0f\n", difficulty);*/
 
   // Create memory-mapped area shared between all threads for reporting hash
   // counts.
@@ -223,24 +244,28 @@ int main(int argc, char *argv[])
 //
 static void manager_loop(int threads)
 {
-  static const int targets[]={50, 75, 80, 90, 95};
-  static const int units[]={31536000, 86400, 3600, 60, 1};
-  static const char units_str[]="ydhms";
 
   fd_set readset;
-  struct timeval tv={1, 0};
-  char msg[256];
   u8 result[52];
-  u64 prev=0, last_result=0, count, avg, count_avg[8];
-  int i, j, ret, len, found=0, count_index=0, count_max=0;
-  double prob, secs;
+  u64 last_result = 0, found = 0, diff;
+  int i, ret, len;
 
   FD_ZERO(&readset);
 
+  for (i = 0; i < 60; i++) elapsed_count_history[i] = -1;
+
+  struct timespec start, end;
+
   while(1) {
+	// Start timing
+	if (reset_timer) {
+		clock_gettime(CLOCK_MONOTONIC, &start);	/* mark start time */
+		reset_timer = 0;
+	}
+
     /* Wait up to 1 second for hashes to be reported */
     FD_SET(sock[0], &readset);
-    if((ret=select(sock[0]+1, &readset, NULL, NULL, quiet?NULL:&tv)) == -1) {
+    if((ret=select(sock[0]+1, &readset, NULL, NULL, NULL)) == -1) {
       perror("select");
       return;
     }
@@ -262,67 +287,48 @@ static void manager_loop(int threads)
         continue;
 
       announce_result(++found, result);
+	  }
 
-      /* Reset hash count */
-      for(i=0,count=0;i < threads;i++)
-        count += thread_count[i];
-      last_result=count;
-      continue;
-    }
+	  clock_gettime(CLOCK_MONOTONIC, &end);
+	  diff = BILLION * (end.tv_sec - start.tv_sec) + end.tv_nsec - start.tv_nsec;
 
-    /* Reset the select() timer */
-    tv.tv_sec=1, tv.tv_usec=0;
+	  if (diff >= BILLION && quiet == 1) {
+		  reset_timer = 1;
 
-    /* Collect updated hash counts */
-    for(i=0,count=0;i < threads;i++)
-      count += thread_count[i];
-    count_avg[count_index]=count-prev;
-    if(++count_index > count_max)
-      count_max=count_index;
-    if(count_index == NELEM(count_avg))
-      count_index=0;
-    prev=count;
-    count -= last_result;
+		  if (elapsed_count_history_array_pointer > 59 - 1) {
+			  elapsed_count_history_array_pointer = 0;
+		  }
 
-    /* Average the last 8 seconds */
-    for(i=0,avg=0;i < count_max;i++)
-      avg += count_avg[i];
-    avg /= count_max;
+		  elapsed_count_history[elapsed_count_history_array_pointer] = found - last_result;
+		  elapsed_count_history_array_pointer++;
 
-    sprintf(msg, "[%llu Kkey/s][Total %llu]", (avg+500)/1000, count);
-
-    /* Display probability */
-    prob=(1-exp(count/-difficulty))*100;
-    if(prob < 99.95)
-      sprintf(msg+strlen(msg), "[Prob %.1f%%]", prob);
-
-    if(avg >= 500) {
-      /* Display target time */
-      if(prob < targets[NELEM(targets)-1]) {
-        for(i=0;prob >= targets[i];i++);
-        secs=(-difficulty*log(1-targets[i]/100.0)-count)/avg;
-        for(j=0;j < NELEM(units)-1 && secs < units[j];j++);
-        secs /= units[j];
-        if(secs >= 1e+8)
-          sprintf(msg+strlen(msg), "[%d%% in %e%c]",
-                  targets[i], secs, units_str[j]);
-        else
-          sprintf(msg+strlen(msg), "[%d%% in %.1f%c]",
-                  targets[i], secs, units_str[j]);
-      }
-    }
-
-    /* Display match count */
-    if(found) {
-      if(!keep_going && max_count > 1)
-        sprintf(msg+strlen(msg), "[Found %d of %d]", found, max_count);
-      else
-        sprintf(msg+strlen(msg), "[Found %d]", found);
-    }
-
-    printf("\r%-78.78s", msg);
-    fflush(stdout);
+		  printf("\r[%i key/s][Found: %llu]", calc_avg_keyGen(elapsed_count_history), found);
+		  //printf("[%i key/s][Found: %llu][Elapsed time 'ns': %llu]\n", calc_avg_keyGen(elapsed_count_history), found, (u64) diff);
+		  last_result += found - last_result;
+		  fflush(stdout);
+	  }
   }
+}
+
+static int calc_avg_keyGen(int countValue[60]) {
+	int result = 0;
+	int countValueCount = 0;
+	int i;
+
+	for (i = 0; i < 60; i++) {
+		if (countValue[i] == -1) {
+			continue;
+		}
+		else {
+			result += countValue[i];
+			countValueCount++;
+		}
+	}
+
+	//if(countValueCount == 0) countValueCount = 1;
+
+	result = result / countValueCount;
+	return result;
 }
 
 static void announce_result(int found, const u8 result[52])
@@ -330,9 +336,8 @@ static void announce_result(int found, const u8 result[52])
   align8 u8 priv_block[64], pub_block[64], cksum_block[64];
   align8 u8 wif[64], checksum[32];
   int j;
-
-  if(!quiet)
-    printf("\n");
+  char privKey[60];
+  char pubAddress[40];
 
   /* Display matching keys in hexadecimal */
   if(verbose) {
@@ -364,10 +369,12 @@ static void announce_result(int found, const u8 result[52])
   memcpy(priv_block+34, checksum, 4);
 
   b58enc(wif, priv_block, 38);
-  if(quiet)
-    printf("%s", wif);
-  else
+  if(quiet == 0 && csv == 0)
     printf("Private Key:   %s\n", wif);
+  else if(quiet == 0 && csv == 1)
+	printf("%s", wif);
+
+  if (output) strcpy(privKey, wif);
 
   /* Convert Public Key to Compressed WIF */
 
@@ -381,16 +388,46 @@ static void announce_result(int found, const u8 result[52])
   memcpy(pub_block+21, checksum, 4);
 
   b58enc(wif, pub_block, 25);
-  if(quiet)
-    printf(",%s\n", wif);
-  else
-    printf("Address:       %s\n", wif);
+  if(quiet == 0 && csv == 0) 
+	  printf("Address:       %s\n", wif);
+  else if(quiet == 0 && csv == 1)
+	  printf(",%s\n", wif);
+
+  if (output == 1) {
+	  char fileBuffer[100];
+	  strcpy(pubAddress, wif);
+
+	  FILE *fp;
+	  fp = fopen("output.txt", "a");
+
+	  if (fp == 0) {
+		  printf("Couldn't open file for output operation!\n");
+		  exit(0);
+	  }
+	  else {
+		  strcpy(fileBuffer, pubAddress);
+
+		  int len = strlen(fileBuffer);
+		  fileBuffer[len] = ' ';
+		  fileBuffer[len + 1] = '\0';
+
+		  strcat(fileBuffer, privKey);
+		  len = strlen(fileBuffer);
+		  fileBuffer[len] = '\n';
+		  fileBuffer[len + 1] = '\0';
+
+		  fputs(fileBuffer, fp);
+		  fclose(fp);
+	  }
+  }
 
   /* Exit after we find 'max_count' solutions */
-  if(!keep_going && found >= max_count)
-    exit(0);
+  if (!keep_going && found >= max_count) {
+	  if (quiet) printf("\n");
+	  exit(0);
+  }
 
-  if(!quiet)
+  if(quiet == 0 && csv == 0)
     printf("---\n");
 }
 
@@ -811,7 +848,7 @@ static void engine(int thread)
 
   /* Main Loop */
 
-  printf("\r");  // This magically makes the loop faster by a smidge
+  //printf("\r");  // This magically makes the loop faster by a smidge
 
   while(1) {
     /* Add 1 in Jacobian coordinates and save the result; repeat STEP times */
