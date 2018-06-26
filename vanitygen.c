@@ -295,7 +295,7 @@ static void manager_loop(int threads)
 	  if (diff >= BILLION && quiet == 1) {
 		  reset_timer = 1;
 
-		  if (elapsed_count_history_array_pointer > 59 - 1) {
+		  if (elapsed_count_history_array_pointer > 59) {
 			  elapsed_count_history_array_pointer = 0;
 		  }
 
